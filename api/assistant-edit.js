@@ -99,26 +99,22 @@ function normalizeAssistantActions(parsed, slides, safeCurrentSlideIndex) {
           : Math.min(safeCurrentSlideIndex + 1, slides.length);
 
         const rawContent = Array.isArray(action?.content)
-          ? action.content
-              .map((item) => cleanText(item))
-              .filter(Boolean)
+          ? action.content.map((item) => cleanText(item)).filter(Boolean)
           : [];
-
-        const nextContent = rawContent.length
-          ? rawContent.slice(0, 4)
-          : [
-              "Ключевой тезис",
-              "Важный акцент",
-              "Практический смысл",
-              "Итоговый вывод",
-            ];
 
         return {
           type,
           slideIndex: createSlideIndex,
           title: cleanText(action?.title) || "Новый слайд",
           description: cleanText(action?.description),
-          content: nextContent,
+          content: rawContent.length
+            ? rawContent.slice(0, 4)
+            : [
+                "Ключевой тезис",
+                "Важный акцент",
+                "Практический смысл",
+                "Итоговый вывод",
+              ],
           imageQuery: cleanText(action?.imageQuery),
           imageDescription: cleanText(action?.imageDescription),
           imageMode: action?.imageMode === "specific" ? "specific" : "similar",
@@ -163,10 +159,7 @@ function normalizeAssistantActions(parsed, slides, safeCurrentSlideIndex) {
           typeof action?.description === "string"
             ? cleanText(action.description)
             : cleanText(sourceSlide?.description),
-        content: nextContent.slice(
-          0,
-          sourceContent.length || nextContent.length
-        ),
+        content: nextContent.slice(0, sourceContent.length || nextContent.length),
         imageQuery: "",
         imageDescription: "",
         imageMode: "similar",
@@ -175,14 +168,10 @@ function normalizeAssistantActions(parsed, slides, safeCurrentSlideIndex) {
     .filter((action) => {
       if (action.type === "update_image") return Boolean(action.imageQuery);
       if (action.type === "create_slide") {
-        return Boolean(
-          action.title || action.description || action.content?.length
-        );
+        return Boolean(action.title || action.description || action.content?.length);
       }
       if (action.type === "update_text") {
-        return Boolean(
-          action.title || action.description || action.content?.length
-        );
+        return Boolean(action.title || action.description || action.content?.length);
       }
 
       return false;
@@ -242,9 +231,7 @@ export default async function handler(req, res) {
     const prompt = cleanText(body?.prompt);
     const currentSlideIndex = Math.round(Number(body?.currentSlideIndex || 0));
     const presentation = body?.presentation || {};
-    const slides = Array.isArray(presentation?.slides)
-      ? presentation.slides
-      : [];
+    const slides = Array.isArray(presentation?.slides) ? presentation.slides : [];
 
     if (!prompt) {
       return res.status(400).json({
@@ -342,16 +329,12 @@ export default async function handler(req, res) {
         {
           role: "system",
           content: `
-Ты — ИИ-ассистент редактора презентаций. Ты должен не просто отвечать, а возвращать действия для изменения презентации.
+Ты — ИИ-ассистент редактора презентаций. Ты должен возвращать действия для изменения презентации.
 
-Твоя задача:
-1. Понять запрос пользователя.
-2. Решить, какие действия нужны:
-   - update_text — изменить текст слайда;
-   - update_image — заменить изображение слайда;
-   - create_slide — создать новый слайд.
-3. Вернуть reply для чата.
-4. Вернуть массив actions.
+Действия:
+- update_text — изменить текст слайда;
+- update_image — заменить изображение слайда;
+- create_slide — создать новый слайд.
 
 ВАЖНО:
 - Если пользователь просит конкретную буквальную замену, выполни её буквально.
@@ -449,7 +432,7 @@ export default async function handler(req, res) {
 
     try {
       parsed = JSON.parse(rawContent);
-    } catch (error) {
+    } catch {
       return res.status(500).json({
         error: "Failed to parse OpenAI JSON",
         raw: rawContent,
