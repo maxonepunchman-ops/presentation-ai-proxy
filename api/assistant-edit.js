@@ -20,8 +20,52 @@ async function readBody(req) {
 
 function cleanText(value) {
   return String(value ?? "")
+    .replace(/```(?:json)?/gi, "")
+    .replace(/```/g, "")
+    .replace(/[{}\[\]]/g, "")
+    .replace(/["']?imageQuery["']?\s*:\s*["'][^"']*["']\s*,?/gi, "")
+    .replace(/["']?imageDescription["']?\s*:\s*["'][^"']*["']\s*,?/gi, "")
+    .replace(/["']?imageMode["']?\s*:\s*["'][^"']*["']\s*,?/gi, "")
+    .replace(/\bimageQuery\b/gi, "")
+    .replace(/\bimageDescription\b/gi, "")
+    .replace(/\bimageMode\b/gi, "")
     .replace(/\s+/g, " ")
+    .replace(/\s+([.,:;!?])/g, "$1")
+    .replace(/^[\s,;:|•-]+/g, "")
+    .replace(/[\s,;:|•-]+$/g, "")
     .trim();
+}
+
+function inferRequestedSlideIndex(prompt, fallbackIndex, slideCount) {
+  const text = String(prompt || "").toLowerCase();
+
+  if (/текущ|этот|данн/.test(text)) {
+    return normalizeSlideIndex(fallbackIndex, slideCount);
+  }
+
+  const patterns = [
+    /(?:на|во|в)\s*(\d{1,2})\s*(?:-?м|м|ом)?\s*слайд/i,
+    /(\d{1,2})\s*(?:-?й|й|ой|ий)?\s*слайд/i,
+    /slide\s*(\d{1,2})/i,
+  ];
+
+  for (const pattern of patterns) {
+    const match = text.match(pattern);
+
+    if (match?.[1]) {
+      return normalizeSlideIndex(Number(match[1]) - 1, slideCount);
+    }
+  }
+
+  return normalizeSlideIndex(fallbackIndex, slideCount);
+}
+
+function isBroadEditPrompt(prompt) {
+  const text = String(prompt || "").toLowerCase();
+
+  return /(добав|расшир|больше|подробн|допол|усиль|улучш|перепиш|измени|поменяй|замени|сделай|сократи|короче|длиннее|текст)/i.test(
+    text,
+  );
 }
 
 function normalizeSlideIndex(value, max) {
@@ -78,8 +122,26 @@ async function fetchOpenAiWithRetry(url, options) {
   throw lastError || new Error("OpenAI request failed");
 }
 
-function normalizeAssistantActions(parsed, slides, safeCurrentSlideIndex) {
-  const actions = Array.isArray(parsed?.actions) ? parsed.actions : [];
+function normalizeAssistantActions(parsed, slides, safeCurrentSlideIndex, prompt) {
+  let actions = Array.isArray(parsed?.actions) ? parsed.actions : [];
+
+  if (!actions.length && isBroadEditPrompt(prompt)) {
+    const slideIndex = inferRequestedSlideIndex(prompt, safeCurrentSlideIndex, slides.length);
+    const sourceSlide = slides[slideIndex] || {};
+
+    actions = [
+      {
+        type: "update_text",
+        slideIndex,
+        title: sourceSlide.title || "Обновлённый слайд",
+        description: sourceSlide.description || "",
+        content: Array.isArray(sourceSlide.content) ? sourceSlide.content : [],
+        imageQuery: "",
+        imageDescription: "",
+        imageMode: "similar",
+      },
+    ];
+  }
 
   return actions
     .map((action) => {
@@ -329,29 +391,46 @@ export default async function handler(req, res) {
         {
           role: "system",
           content: `
-Ты — ИИ-ассистент редактора презентаций. Ты должен возвращать действия для изменения презентации.
+Ты — ИИ-ассистент редактора презентаций. Твоя задача — сразу менять презентацию, а не вести диалог.
+
+ГЛАВНОЕ ПРАВИЛО:
+- Не задавай уточняющих вопросов, если можно сделать разумную правку.
+- Если пользователь просит "поменяй", "добавь", "сделай больше текста", "улучши", "перепиши" — сразу верни actions.
+- Уточнение можно спрашивать только если вообще невозможно понять, какой слайд или что менять.
+
+НУМЕРАЦИЯ СЛАЙДОВ:
+- Пользователь считает слайды с 1.
+- В JSON slideIndex считается с 0.
+- "2 слайд" = slideIndex 1.
+- "3 слайд" = slideIndex 2.
+- "текущий слайд" = currentSlideIndex.
+- Если номер не указан, меняй текущий слайд.
 
 Действия:
-- update_text — изменить текст слайда;
-- update_image — заменить изображение слайда;
+- update_text — изменить текст слайда.
+- update_image — заменить изображение слайда.
 - create_slide — создать новый слайд.
 
-ВАЖНО:
-- Если пользователь просит конкретную буквальную замену, выполни её буквально.
-- «Замени всё на слово диван» значит title = «диван», description = «диван», каждый пункт content = «диван».
-- Если пользователь просит поменять заголовок — меняй только заголовок.
-- Если просит поменять описание — меняй описание.
-- Если просит изменить весь слайд — меняй title, description и content.
+КАК РЕДАКТИРОВАТЬ ТЕКСТ:
+- Если пользователь просит "добавь больше текста" — расширь description и content выбранного слайда, сохрани смысл, сделай текст содержательнее.
+- Если пользователь просит "измени текст на 2 слайде" — обнови текст 2-го слайда, не спрашивай тему заново.
+- Если пользователь просит "поменяй заголовок" — меняй только title, остальное оставь как было.
+- Если пользователь просит "поменяй описание" — меняй только description, остальное оставь как было.
+- Если пользователь просит "замени всё на слово диван" — title, description и каждый пункт content должны быть "диван".
+- Если пользователь просит "на всех слайдах" — создай действие для каждого слайда.
 - Если просит картинку — верни update_image.
-- imageQuery всегда на английском.
-- Если пользователь говорит «текущий слайд», используй currentSlideIndex.
-- Если пользователь говорит «на всех слайдах», создай действия для всех слайдов.
-- Если просит добавить слайд, верни create_slide.
-- Не пиши технические детали JSON в reply.
-- Если запрос непонятен, верни reply с уточнением и пустой actions.
+- Если просит добавить слайд — верни create_slide.
+
+ТЕКСТОВАЯ ЧИСТОТА:
+- В title, description и content запрещены служебные слова: imageQuery, imageDescription, imageMode, JSON, schema, prompt.
+- Не вставляй кавычки, фигурные скобки, запятые от JSON, двоеточия от JSON.
+- Не пиши технические детали в текст слайда.
+- imageQuery всегда только на английском и только для поиска картинки.
+- imageQuery не должен попадать в title, description или content.
 
 Для update_text:
 - заполняй title, description, content.
+- Если меняется только одно поле, остальные верни как в исходном слайде.
 - imageQuery и imageDescription пустые строки.
 - imageMode = "similar".
 
@@ -366,6 +445,7 @@ export default async function handler(req, res) {
 - если картинка не нужна, imageQuery пустая строка.
 - imageMode = "specific" или "similar".
 
+reply должен быть коротким: "Готово, применяю правки." или похожая фраза.
 Верни только JSON по схеме.
           `.trim(),
         },
@@ -443,7 +523,8 @@ export default async function handler(req, res) {
     const normalizedActions = normalizeAssistantActions(
       parsed,
       slides,
-      safeCurrentSlideIndex
+      safeCurrentSlideIndex,
+      prompt
     );
 
     return res.status(200).json({
