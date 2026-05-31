@@ -30,10 +30,19 @@ function normalizeSlideCount(value) {
 
 function cleanText(value) {
   return String(value ?? "")
+    .replace(/```(?:json)?/gi, "")
+    .replace(/```/g, "")
+    .replace(/[{}\[\]]/g, "")
+    .replace(/["']?imageQuery["']?\s*:\s*["'][^"']*["']\s*,?/gi, "")
+    .replace(/["']?imageDescription["']?\s*:\s*["'][^"']*["']\s*,?/gi, "")
+    .replace(/\bimageQuery\b/gi, "")
+    .replace(/\bimageDescription\b/gi, "")
     .replace(/\s+/g, " ")
     .replace(/\s+([.,:;!?])/g, "$1")
     .replace(/([([{«])\s+/g, "$1")
     .replace(/\s+([)\]}»])/g, "$1")
+    .replace(/^[\s,;:|•-]+/g, "")
+    .replace(/[\s,;:|•-]+$/g, "")
     .trim();
 }
 
@@ -242,7 +251,9 @@ ${selectedLanguage.instruction}
 - не повторяй одну мысль разными словами;
 - делай заголовки живыми, но не кликбейтными;
 - пункты должны быть понятными без дополнительного объяснения;
-- не вставляй технические слова JSON, imageQuery, schema, prompt;
+- не вставляй технические слова JSON, imageQuery, imageDescription, schema, prompt;
+- не вставляй кавычки, фигурные скобки, двоеточия или запятые от JSON в title, description и content;
+- imageQuery должен быть только в отдельном поле imageQuery и никогда не должен попадать в текст слайда;
 - не ставь лишние пробелы перед знаками препинания;
 - не пиши общими фразами без смысла;
 - не используй шаблонные фразы вроде "данный аспект является важным";
